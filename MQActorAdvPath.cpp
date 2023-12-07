@@ -34,6 +34,9 @@ FOLLOW FollowState = FOLLOW::OFF;
 STATUS StatusState = STATUS::OFF;
 
 
+std::vector<std::shared_ptr<postoffice::Address>> Subscribers;
+std::queue<std::shared_ptr<proto::actorfollowee::Position>> Positions;
+postoffice::DropboxAPI s_DropBox;
 postoffice::Address subscription;
 
 class MQActorAdvPathType* pMQActorAdvPathType = nullptr;
@@ -138,9 +141,8 @@ static void Post(postoffice::Address address, mq::proto::actorfollowee::MessageI
 {
 	proto::actorfollowee::Message message;
 	message.set_id(messageId);
-	if (data.has_value()) {
-		auto pos = data.value();
-		message.set_allocated_position(&pos);
+	if (data) {
+		*message.mutable_position() = *data;
 	}
 
 	s_DropBox.Post(address, message, nullptr);
