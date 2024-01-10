@@ -26,6 +26,12 @@
 #pragma comment(lib, "libprotobuf")
 #endif
 
+#pragma comment(lib, "login")
+
+std::vector<std::shared_ptr<postoffice::Address>> Subscribers;
+std::queue<std::shared_ptr<proto::actorfollowee::Position>> Positions;
+postoffice::DropboxAPI s_DropBox;
+
 void DoFwd(bool hold);
 void DoBck(bool hold);
 void DoLft(bool hold);

@@ -19,6 +19,13 @@ PLUGIN_VERSION(0.1);
  */
  // bool ShowMQActorAdvPathWindow = true;
 
+static std::chrono::steady_clock::time_point PulseTimer = std::chrono::steady_clock::now();
+static std::chrono::steady_clock::time_point OpenDoorTimer = std::chrono::steady_clock::now();
+static std::chrono::steady_clock::time_point StuckTimer = std::chrono::steady_clock::now();
+
+float m_stuckX = 0;
+float m_stuckY = 0;
+
 enum class FOLLOW {
 	OFF = 0,
 	ON = 1,
@@ -30,13 +37,18 @@ enum class STATUS {
 	PAUSED = 2
 };
 
+
+enum struct DoorState {
+	Closed = 0,
+	Open = 1,
+	Opening = 2,
+	Closing = 3
+};
+
+const int MIN_DISTANCE_BETWEEN_POINTS = 5;
 FOLLOW FollowState = FOLLOW::OFF;
 STATUS StatusState = STATUS::OFF;
 
-
-std::vector<std::shared_ptr<postoffice::Address>> Subscribers;
-std::queue<std::shared_ptr<proto::actorfollowee::Position>> Positions;
-postoffice::DropboxAPI s_DropBox;
 postoffice::Address subscription;
 
 class MQActorAdvPathType* pMQActorAdvPathType = nullptr;
@@ -119,20 +131,27 @@ void ReceivedMessageHandler(const std::shared_ptr<postoffice::Message>& message)
 	switch (advPathMessage.id())
 	{
 	case mq::proto::actorfollowee::MessageId::Subscribe:
-		if (message->Sender.has_value()) {
+		if (message->Sender) {
 			Subscribers.push_back(std::make_shared<postoffice::Address>(message->Sender.value()));
 		}
 		break;
 	case mq::proto::actorfollowee::MessageId::UnSubscribe:
-		for (std::vector<std::shared_ptr<postoffice::Address> >::iterator it = Subscribers.begin(); it != Subscribers.end();)
+		Subscribers.erase(std::remove_if(Subscribers.begin(), Subscribers.end(), [message](const auto& subscriber)
 		{
-			if ((*it)->Character == message->Sender->Character) {
-				Subscribers.erase(it);
-			}
-		}
+			return subscriber->Character == message->Sender->Character;
+		}), Subscribers.end());
 		break;
 	case mq::proto::actorfollowee::MessageId::PositionUpdate:
-		Positions.push(std::make_shared<mq::proto::actorfollowee::Position>(advPathMessage.position()));
+		auto newposition = advPathMessage.position();
+		if (Positions.empty()) {
+			Positions.push(std::make_shared<mq::proto::actorfollowee::Position>(newposition));
+		}
+		else {
+			auto previousposition = Positions.back();
+			if (GetDistance3D(previousposition->x(), previousposition->y(), previousposition->z(), newposition.x(), newposition.y(), newposition.z()) > MIN_DISTANCE_BETWEEN_POINTS) {
+				Positions.push(std::make_shared<mq::proto::actorfollowee::Position>(newposition));
+			}
+		}
 		break;
 	}
 }
@@ -145,7 +164,7 @@ static void Post(postoffice::Address address, mq::proto::actorfollowee::MessageI
 		*message.mutable_position() = *data;
 	}
 
-	s_DropBox.Post(address, message, nullptr);
+	s_DropBox.Post(address, message);
 }
 
 static void Post(std::string reciever, mq::proto::actorfollowee::MessageId messageId)
@@ -165,13 +184,15 @@ void NotifyActorBotManager()
 		proto::actorfollowee::Position newposition;
 		newposition.set_spawnid(pSpawn->SpawnID);
 		newposition.set_name(pSpawn->Name);
+		newposition.set_zoneid(pSpawn->Zone);
 		newposition.set_x(pSpawn->X);
 		newposition.set_y(pSpawn->Y);
 		newposition.set_z(pSpawn->Z);
 		newposition.set_heading(pSpawn->Heading);
 
-		for (std::vector<std::shared_ptr<postoffice::Address>>::iterator it = Subscribers.begin(); it != Subscribers.end();) {
-			Post(**it, mq::proto::actorfollowee::MessageId::PositionUpdate, newposition);
+		for (auto& subscriber : Subscribers) // access by reference to avoid copying
+		{
+			Post(*subscriber, mq::proto::actorfollowee::MessageId::PositionUpdate, newposition);
 		}
 	}
 }
@@ -241,26 +262,31 @@ void DoStop() {
 }
 
 void StartFollowing(PlayerClient* pSpawn) {
-	WriteChatf("[MQActorAdvPath] Following \aw%s\ax", pSpawn->Name);
+	WriteChatf("[MQActorAdvPath] Following \aw%s\ax.", pSpawn->Name);
 	Post(pSpawn->Name, proto::actorfollowee::MessageId::Subscribe);
 	FollowState = FOLLOW::ON;
 	StatusState = STATUS::ON;
 }
 
 void EndFollowing() {
-	DoStop();
-	FollowState = FOLLOW::OFF;
-	StatusState = STATUS::OFF;
-	std::queue<std::shared_ptr<proto::actorfollowee::Position>>().swap(Positions);
-	Post(subscription, proto::actorfollowee::MessageId::UnSubscribe);
+	if (subscription.Character) {
+		DoStop();
+		FollowState = FOLLOW::OFF;
+		StatusState = STATUS::OFF;
+		std::queue<std::shared_ptr<proto::actorfollowee::Position>>().swap(Positions);
+		Post(subscription, proto::actorfollowee::MessageId::UnSubscribe);
+		WriteChatf("[MQActorAdvPath] Stopped following  \aw%s\ax.", subscription.Character);
+		subscription.Server = std::nullopt;
+		subscription.Character = std::nullopt;
+	}
 }
 
 void FollowCommand(SPAWNINFO* pChar, char* szLine) {
 	if (szLine && szLine[0] == '\0')
 	{
 		WriteChatf("[MQActorAdvPath] Usage:");
-		WriteChatf("    /actadvpath [character]");
-		WriteChatf("    /actadvpath [on|off|pause|resume]");
+		WriteChatf("    /actfollow [character]");
+		WriteChatf("    /actfollow [on|off|pause|resume]");
 		return;
 	}
 
@@ -286,11 +312,13 @@ void FollowCommand(SPAWNINFO* pChar, char* szLine) {
 	else if (ci_equals(szArg1, "pause")) {
 		if (FollowState == FOLLOW::ON) {
 			StatusState = STATUS::PAUSED;
+			WriteChatf("[MQActorAdvPath] Paused following.");
 		}
 	}
 	else if (ci_equals(szArg1, "resume")) {
 		if (FollowState == FOLLOW::ON) {
 			StatusState = STATUS::ON;
+			WriteChatf("[MQActorAdvPath] Resumed following.");
 		}
 	}
 	else {
@@ -350,23 +378,84 @@ void LookAt(float x, float y, float z) {
 	}
 }
 
-void Follow() {
-	if (Positions.size() && StatusState == STATUS::ON) {
-		auto spawn = GetCharInfo()->pSpawn;
-		auto position = Positions.front();
-		auto distance3d = GetDistance3D(spawn->X, spawn->Y, spawn->Z, position->x(), position->y(), position->z());
-		if (distance3d > 50) {
-			WriteChatf("[MQActorAdvPath] Warp detected, exiting...");
-			EndFollowing();
-			return;
+void AttemptOpenDoor()
+{
+	// don't execute if we've got an item on the cursor.
+	if (GetPcProfile()->GetInventorySlot(InvSlot_Cursor))
+		return;
+
+	auto now = std::chrono::steady_clock::now();
+	if (now > OpenDoorTimer) {
+		return;
+	}
+
+	OpenDoorTimer = now + std::chrono::milliseconds(500);
+
+	auto pSwitch = FindSwitchByName();
+	if (pSwitch && GetDistance(pSwitch->X, pSwitch->Y) < 25 && (pSwitch->State == (BYTE)DoorState::Closed || pSwitch->State == (BYTE)DoorState::Closing))
+	{
+		pSwitch->UseSwitch(GetCharInfo()->pSpawn->SpawnID, 0xFFFFFFFF, 0, nullptr);
+	}
+}
+
+
+
+void StuckCheck()
+{
+	if (StatusState != STATUS::ON)
+		return;
+
+	auto now = std::chrono::steady_clock::now();
+	if (now > StuckTimer) {
+		return;
+	}
+
+	// check every 100 ms
+	StuckTimer = now + std::chrono::milliseconds(100);
+
+	if (GetCharInfo())
+	{
+		if (GetCharInfo()->pSpawn->SpeedMultiplier != -10000
+			&& FindSpeed(GetCharInfo()->pSpawn)
+			&& (GetDistance(m_stuckX, m_stuckY) < FindSpeed(GetCharInfo()->pSpawn) / 600)
+			&& !GetCharInfo()->pSpawn->mPlayerPhysicsClient.Levitate
+			&& !GetCharInfo()->pSpawn->UnderWater
+			&& !GetCharInfo()->Stunned
+			&& StatusState == STATUS::ON)
+		{
+			ExecuteCmd(CMD_JUMP, 1, 0);
+			ExecuteCmd(CMD_JUMP, 0, 0);
 		}
 
-		if (GetDistance(spawn->X, spawn->Y, position->x(), position->y()) > 20) {
-			LookAt(position->x(), position->y(), position->z());
-			DoFwd(true);
-		}
-		else {
-			Positions.pop();
+		m_stuckX = GetCharInfo()->pSpawn->X;
+		m_stuckY = GetCharInfo()->pSpawn->Y;
+	}
+}
+
+void Follow() {
+	if (Positions.size() && StatusState == STATUS::ON) {
+		auto pSpawn = GetCharInfo()->pSpawn;
+		auto position = Positions.front();
+		if (position->zoneid() == pSpawn->Zone) {
+			auto distance3d = GetDistance3D(pSpawn->X, pSpawn->Y, pSpawn->Z, position->x(), position->y(), position->z());
+			if (distance3d > 50) {
+				WriteChatf("[MQActorAdvPath] Possible warp detected, exiting...");
+				EndFollowing();
+				return;
+			}
+
+			if (GetDistance(pSpawn->X, pSpawn->Y, position->x(), position->y()) > MIN_DISTANCE_BETWEEN_POINTS) {
+				LookAt(position->x(), position->y(), position->z());
+				DoFwd(true);
+				AttemptOpenDoor();
+				StuckCheck();
+			}
+			else {
+				Positions.pop();
+				if (Positions.empty()) {
+					DoStop();
+				}
+			}
 		}
 	}
 }
@@ -383,14 +472,14 @@ PLUGIN_API void InitializePlugin()
 	Subscribers.clear();
 	std::queue<std::shared_ptr<proto::actorfollowee::Position>>().swap(Positions);
 
-	s_DropBox = postoffice::AddActor("actorbots", ReceivedMessageHandler);
+	s_DropBox = postoffice::AddActor(ReceivedMessageHandler);
 
 	// Examples:
 	AddCommand("/actfollow", FollowCommand);
 	pMQActorAdvPathType = new MQActorAdvPathType;
 	AddMQ2Data("ActorAdvPath", dataActorBots);
 
-	WriteChatf("[MQActorAdvPath] \ayv%1.0f\ax", MQ2Version);
+	WriteChatf("[MQActorAdvPath] \ayv%f\ax", MQ2Version);
 }
 
 /**
@@ -407,64 +496,6 @@ PLUGIN_API void ShutdownPlugin()
 	RemoveMQ2Data("ActorAdvPath");
 	delete pMQActorAdvPathType;
 	//ClearAll();
-}
-
-/**
- * @fn OnCleanUI
- *
- * This is called once just before the shutdown of the UI system and each time the
- * game requests that the UI be cleaned.  Most commonly this happens when a
- * /loadskin command is issued, but it also occurs when reaching the character
- * select screen and when first entering the game.
- *
- * One purpose of this function is to allow you to destroy any custom windows that
- * you have created and cleanup any UI items that need to be removed.
- */
-PLUGIN_API void OnCleanUI()
-{
-	// DebugSpewAlways("MQActorAdvPath::OnCleanUI()");
-}
-
-/**
- * @fn OnReloadUI
- *
- * This is called once just after the UI system is loaded. Most commonly this
- * happens when a /loadskin command is issued, but it also occurs when first
- * entering the game.
- *
- * One purpose of this function is to allow you to recreate any custom windows
- * that you have setup.
- */
-PLUGIN_API void OnReloadUI()
-{
-	// DebugSpewAlways("MQActorAdvPath::OnReloadUI()");
-}
-
-/**
- * @fn OnDrawHUD
- *
- * This is called each time the Heads Up Display (HUD) is drawn.  The HUD is
- * responsible for the net status and packet loss bar.
- *
- * Note that this is not called at all if the HUD is not shown (default F11 to
- * toggle).
- *
- * Because the net status is updated frequently, it is recommended to have a
- * timer or counter at the start of this call to limit the amount of times the
- * code in this section is executed.
- */
-PLUGIN_API void OnDrawHUD()
-{
-	/*
-		static std::chrono::steady_clock::time_point DrawHUDTimer = std::chrono::steady_clock::now();
-		// Run only after timer is up
-		if (std::chrono::steady_clock::now() > DrawHUDTimer)
-		{
-			// Wait half a second before running again
-			DrawHUDTimer = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-			DebugSpewAlways("MQActorAdvPath::OnDrawHUD()");
-		}
-	*/
 }
 
 /**
@@ -503,39 +534,14 @@ PLUGIN_API void SetGameState(int GameState)
  */
 PLUGIN_API void OnPulse()
 {
-	static std::chrono::steady_clock::time_point PulseTimer = std::chrono::steady_clock::now();
 	if (GetGameState() == GAMESTATE_INGAME) {
 		// Run only after timer is up
 		if (std::chrono::steady_clock::now() > PulseTimer) {
-			PulseTimer = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+			PulseTimer = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
 			NotifyActorBotManager();
 		}
+		Follow();
 	}
-}
-
-/**
- * @fn OnWriteChatColor
- *
- * This is called each time WriteChatColor is called (whether by MQ2Main or by any
- * plugin).  This can be considered the "when outputting text from MQ" callback.
- *
- * This ignores filters on display, so if they are needed either implement them in
- * this section or see @ref OnIncomingChat where filters are already handled.
- *
- * If CEverQuest::dsp_chat is not called, and events are required, they'll need to
- * be implemented here as well.  Otherwise, see @ref OnIncomingChat where that is
- * already handled.
- *
- * For a list of Color values, see the constants for USERCOLOR_.  The default is
- * USERCOLOR_DEFAULT.
- *
- * @param Line const char* - The line that was passed to WriteChatColor
- * @param Color int - The type of chat text this is to be sent as
- * @param Filter int - (default 0)
- */
-PLUGIN_API void OnWriteChatColor(const char* Line, int Color, int Filter)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnWriteChatColor(%s, %d, %d)", Line, Color, Filter);
 }
 
 /**
@@ -596,38 +602,6 @@ PLUGIN_API void OnRemoveSpawn(PSPAWNINFO pSpawn)
 }
 
 /**
- * @fn OnAddGroundItem
- *
- * This is called each time a ground item is added to a zone (ie, something spawns).
- * It is also called for each existing ground item when a plugin first initializes.
- *
- * When zoning, this is called for all ground items in the zone after @ref OnEndZone
- * is called and before @ref OnZoned is called.
- *
- * @param pNewGroundItem PGROUNDITEM - The ground item that was added
- */
-PLUGIN_API void OnAddGroundItem(PGROUNDITEM pNewGroundItem)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnAddGroundItem(%d)", pNewGroundItem->DropID);
-}
-
-/**
- * @fn OnRemoveGroundItem
- *
- * This is called each time a ground item is removed from a zone (ie, something
- * despawns or is picked up).  It is NOT called when a plugin shuts down.
- *
- * When zoning, this is called for all ground items in the zone after
- * @ref OnBeginZone is called.
- *
- * @param pGroundItem PGROUNDITEM - The ground item that was removed
- */
-PLUGIN_API void OnRemoveGroundItem(PGROUNDITEM pGroundItem)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnRemoveGroundItem(%d)", pGroundItem->DropID);
-}
-
-/**
  * @fn OnBeginZone
  *
  * This is called just after entering a zone line and as the loading screen appears.
@@ -635,8 +609,8 @@ PLUGIN_API void OnRemoveGroundItem(PGROUNDITEM pGroundItem)
 PLUGIN_API void OnBeginZone()
 {
 	// DebugSpewAlways("MQActorAdvPath::OnBeginZone()");
-	Subscribers.clear();
-	EndFollowing();
+	//Subscribers.clear();
+	//EndFollowing();
 }
 
 /**
@@ -664,93 +638,4 @@ PLUGIN_API void OnEndZone()
 PLUGIN_API void OnZoned()
 {
 	// DebugSpewAlways("MQActorAdvPath::OnZoned()");
-}
-
-/**
- * @fn OnUpdateImGui
- *
- * This is called each time that the ImGui Overlay is rendered. Use this to render
- * and update plugin specific widgets.
- *
- * Because this happens extremely frequently, it is recommended to move any actual
- * work to a separate call and use this only for updating the display.
- */
-PLUGIN_API void OnUpdateImGui()
-{
-	/*
-		if (GetGameState() == GAMESTATE_INGAME)
-		{
-			if (ShowMQActorAdvPathWindow)
-			{
-				if (ImGui::Begin("MQActorAdvPath", &ShowMQActorAdvPathWindow, ImGuiWindowFlags_MenuBar))
-				{
-					if (ImGui::BeginMenuBar())
-					{
-						ImGui::Text("MQActorAdvPath is loaded!");
-						ImGui::EndMenuBar();
-					}
-				}
-				ImGui::End();
-			}
-		}
-	*/
-}
-
-/**
- * @fn OnMacroStart
- *
- * This is called each time a macro starts (ex: /mac somemacro.mac), prior to
- * launching the macro.
- *
- * @param Name const char* - The name of the macro that was launched
- */
-PLUGIN_API void OnMacroStart(const char* Name)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnMacroStart(%s)", Name);
-}
-
-/**
- * @fn OnMacroStop
- *
- * This is called each time a macro stops (ex: /endmac), after the macro has ended.
- *
- * @param Name const char* - The name of the macro that was stopped.
- */
-PLUGIN_API void OnMacroStop(const char* Name)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnMacroStop(%s)", Name);
-}
-
-/**
- * @fn OnLoadPlugin
- *
- * This is called each time a plugin is loaded (ex: /plugin someplugin), after the
- * plugin has been loaded and any associated -AutoExec.cfg file has been launched.
- * This means it will be executed after the plugin's @ref InitializePlugin callback.
- *
- * This is also called when THIS plugin is loaded, but initialization tasks should
- * still be done in @ref InitializePlugin.
- *
- * @param Name const char* - The name of the plugin that was loaded
- */
-PLUGIN_API void OnLoadPlugin(const char* Name)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnLoadPlugin(%s)", Name);
-}
-
-/**
- * @fn OnUnloadPlugin
- *
- * This is called each time a plugin is unloaded (ex: /plugin someplugin unload),
- * just prior to the plugin unloading.  This means it will be executed prior to that
- * plugin's @ref ShutdownPlugin callback.
- *
- * This is also called when THIS plugin is unloaded, but shutdown tasks should still
- * be done in @ref ShutdownPlugin.
- *
- * @param Name const char* - The name of the plugin that is to be unloaded
- */
-PLUGIN_API void OnUnloadPlugin(const char* Name)
-{
-	// DebugSpewAlways("MQActorAdvPath::OnUnloadPlugin(%s)", Name);
 }
