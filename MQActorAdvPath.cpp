@@ -56,21 +56,19 @@ class MQActorAdvPathType : public MQ2Type
 {
 public:
 	enum Members {
-		Active = 1,
-		State = 2,
+		IsActive = 1,
 		Status = 3,
-		Waypoints = 4,
-		Following = 5,
-		Paused = 6,
+		WaypointsCount = 4,
+		IsFollowing = 5,
+		IsPaused = 6,
 	};
 
 	MQActorAdvPathType() : MQ2Type("ActorAdvPath") {
-		TypeMember(Active);
-		TypeMember(State);
+		TypeMember(IsActive);
 		TypeMember(Status);
-		TypeMember(Waypoints);
-		TypeMember(Following);
-		TypeMember(Paused);
+		TypeMember(WaypointsCount);
+		TypeMember(IsFollowing);
+		TypeMember(IsPaused);
 	}
 
 	virtual bool GetMember(MQVarPtr VarPtr, const char* Member, char* Index, MQTypeVar& Dest) override {
@@ -80,27 +78,23 @@ public:
 
 		switch ((Members)(pMember->ID))
 		{
-		case MQActorAdvPathType::Active:
+		case MQActorAdvPathType::IsActive:
 			Dest.DWord = (gbInZone && GetCharInfo() && GetCharInfo()->pSpawn);
 			Dest.Type = mq::datatypes::pBoolType;
-			return true;
-		case MQActorAdvPathType::State:
-			Dest.Type = mq::datatypes::pIntType;
-			Dest.Int = static_cast<int>(FollowState);
 			return true;
 		case MQActorAdvPathType::Status:
 			Dest.Type = mq::datatypes::pIntType;
 			Dest.Int = static_cast<int>(StatusState);
 			return true;
-		case MQActorAdvPathType::Waypoints:
+		case MQActorAdvPathType::WaypointsCount:
 			Dest.Type = mq::datatypes::pIntType;
 			Dest.Int = Subscribers.size();
 			return true;
-		case Following:
+		case MQActorAdvPathType::IsFollowing:
 			Dest.DWord = (FollowState == FOLLOW::ON);
 			Dest.Type = mq::datatypes::pBoolType;
 			return true;
-		case Paused:
+		case MQActorAdvPathType::IsPaused:
 			Dest.DWord = (StatusState == STATUS::PAUSED);
 			Dest.Type = mq::datatypes::pBoolType;
 			return true;

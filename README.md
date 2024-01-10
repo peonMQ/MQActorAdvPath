@@ -1,6 +1,6 @@
 # MQActorAdvPath
 
-One Paragraph project description goes here
+This plugin allows you to follow a player movement more precisely using MQ actors
 
 ## Getting Started
 
@@ -15,28 +15,31 @@ Quick start instructions to get users up and going
 Describe the commands available and how to use them.
 
 ```txt
-Give examples
+========= Actor Advance Pathing Help =========
+/actfollow JohnDoe
+/actfollow pause
+/actfollow resume
+/actfollow off
+===============================================
 ```
 
-### Configuration File
 
-Describe the configuration file and what the settings do
+### TLO
 
-```yaml
-- Example goes here
+```txt
+${ActorAdvPath.IsActive} - Plugin Loaded and ready
+${ActorAdvPath.FollowState} - FollowState, 0 = off, 1 = on
+${ActorAdvPath.Status} - Status 0 = off , 1 = on , 2 = paused
+${ActorAdvPath.WaypointsCount} - Total Number of current waypoints
+${ActorAdvPath.IsFollowing} - BOOL Is following spawn
+${ActorAdvPath.IsPaused} - BOOL Is paused
 ```
 
-## Other Notes
-
-Add additional notes
 
 ## Authors
 
-* **Your name** - *Initial work*
-
-See also the list of [contributors](https://github.com/your/project/contributors) who participated in this project.
+* **ProjectEon** - *Initial work*
 
 ## Acknowledgments
 
-* Inspiration from...
-* I'd like to thank the Thieves' Guild for helping me with all the code I stole...
+* Inspiration from MQ2NetAdvPath and MQ2AdvPath as well as MQ2Nav
