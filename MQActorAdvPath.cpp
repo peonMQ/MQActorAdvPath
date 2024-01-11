@@ -131,9 +131,9 @@ void ReceivedMessageHandler(const std::shared_ptr<postoffice::Message>& message)
 		break;
 	case mq::proto::actorfollowee::MessageId::UnSubscribe:
 		Subscribers.erase(std::remove_if(Subscribers.begin(), Subscribers.end(), [message](const auto& subscriber)
-		{
-			return subscriber->Character == message->Sender->Character;
-		}), Subscribers.end());
+			{
+				return subscriber->Character == message->Sender->Character;
+			}), Subscribers.end());
 		break;
 	case mq::proto::actorfollowee::MessageId::PositionUpdate:
 		auto newposition = advPathMessage.position();
@@ -256,7 +256,7 @@ void DoStop() {
 }
 
 void StartFollowing(PlayerClient* pSpawn) {
-	WriteChatf("[MQActorAdvPath] Following \aw%s\ax.", pSpawn->Name);
+	WriteChatf("[MQActorAdvPath] Following \ay%s\ax.", pSpawn->Name);
 	Post(pSpawn->Name, proto::actorfollowee::MessageId::Subscribe);
 	FollowState = FOLLOW::ON;
 	StatusState = STATUS::ON;
@@ -269,7 +269,7 @@ void EndFollowing() {
 		StatusState = STATUS::OFF;
 		std::queue<std::shared_ptr<proto::actorfollowee::Position>>().swap(Positions);
 		Post(subscription, proto::actorfollowee::MessageId::UnSubscribe);
-		WriteChatf("[MQActorAdvPath] Stopped following  \aw%s\ax.", subscription.Character);
+		WriteChatf("[MQActorAdvPath] Stopped following \ay%s\ax.", subscription.Character.value().c_str());
 		subscription.Server = std::nullopt;
 		subscription.Character = std::nullopt;
 	}
@@ -349,8 +349,8 @@ void LookAt(float x, float y, float z) {
 			pCharSpawn->Heading = (float)gFaceAngle;
 			gFaceAngle = 10000.0f;
 
-			if (spawn-> FeetWet || spawn->UnderWater == 5) { 
-				spawn->CameraAngle = (float)(atan2(z - spawn->Z, (float)GetDistance(spawn->X, spawn->Y, x, y)) * 256.0f / PI); 
+			if (spawn->FeetWet || spawn->UnderWater == 5) {
+				spawn->CameraAngle = (float)(atan2(z - spawn->Z, (float)GetDistance(spawn->X, spawn->Y, x, y)) * 256.0f / PI);
 			}
 			else if (spawn->mPlayerPhysicsClient.Levitate == 2) {
 				if (z < spawn->Z - 5) {
@@ -462,7 +462,7 @@ void Follow() {
  */
 PLUGIN_API void InitializePlugin()
 {
-	DebugSpewAlways("[MQActorAdvPath]::Initializing version %f", MQ2Version);
+	DebugSpewAlways("[MQActorAdvPath]::Initializing version %.2f", MQ2Version);
 	Subscribers.clear();
 	std::queue<std::shared_ptr<proto::actorfollowee::Position>>().swap(Positions);
 
@@ -473,7 +473,7 @@ PLUGIN_API void InitializePlugin()
 	pMQActorAdvPathType = new MQActorAdvPathType;
 	AddMQ2Data("ActorAdvPath", dataActorBots);
 
-	WriteChatf("[MQActorAdvPath] \ayv%f\ax", MQ2Version);
+	WriteChatf("[MQActorAdvPath] \ayv%.2f\ax", MQ2Version);
 }
 
 /**
