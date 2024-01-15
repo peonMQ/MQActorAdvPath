@@ -315,6 +315,21 @@ void FollowCommand(SPAWNINFO* pChar, char* szLine) {
 			WriteChatf("[MQActorAdvPath] Resumed following.");
 		}
 	}
+	else if (ci_equals(szArg1, "id")) {
+		auto spawnID = GetIntFromString(GetArg(szArg1, szLine, 2), 0);
+		if (auto pSpawn = GetSpawnByID(spawnID)) {
+			if (Subscribers.size()) {
+				WriteChatf("[MQActorAdvPath] Im being followed so cannot follow others.");
+				return;
+			}
+
+			StartFollowing(pSpawn);
+		}
+		else {
+			WriteChatf("[MQActorAdvPath] SpawnID not found \aw%s\ax.", spawnID);
+			return;
+		}
+	}
 	else {
 		if (auto pSpawn = GetSpawnByName(szArg1)) {
 			if (Subscribers.size()) {
